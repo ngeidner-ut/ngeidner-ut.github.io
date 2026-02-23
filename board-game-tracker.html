@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BoardLog – Game Tracker</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,600;9..40,700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0f1117; font-family: 'DM Sans', sans-serif; color: #e8eaf0; }
+    ::selection { background: #f0a500; color: #000; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #0f1117; }
+    ::-webkit-scrollbar-thumb { background: #2a2e42; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const STORAGE_KEY = "bgtracker-sessions";
+    const YEAR = new Date().getFullYear();
+
+    const C = {
+      bg: "#0f1117", surface: "#1a1d27", border: "#2a2e42",
+      accent: "#f0a500", accentDim: "rgba(240,165,0,0.15)",
+      text: "#e8eaf0", textMuted: "#8890aa", textDim: "#555c75",
+      green: "#4caf7d", greenDim: "rgba(76,175,125,0.15)", red: "#e05c5c",
+    };
+
+    const css = `
+      input, textarea, select { outline: none; font-family: inherit; }
+      button { cursor: pointer; font-family: inherit; }
+      .tab-btn { border: none; background: none; padding: 10px 20px; font-size: 14px; font-weight: 600; letter-spacing: 0.04em; color: ${C.textMuted}; border-bottom: 2px solid transparent; transition: all 0.2s; }
+      .tab-btn:hover { color: ${C.text}; }
+      .tab-btn.active { color: ${C.accent}; border-bottom-color: ${C.accent}; }
+      .field-label { display: block; font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: ${C.textMuted}; margin-bottom: 6px; font-family: 'Space Mono', monospace; }
+      .field-input { width: 100%; background: ${C.bg}; border: 1.5px solid ${C.border}; border-radius: 8px; padding: 10px 14px; color: ${C.text}; font-size: 15px; transition: border-color 0.2s; }
+      .field-input:focus { border-color: ${C.accent}; }
+      .field-input::placeholder { color: ${C.textDim}; }
+      .card { background: ${C.surface}; border: 1px solid ${C.border}; border-radius: 12px; }
+      .action-btn { border: none; border-radius: 6px; padding: 6px 12px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; transition: all 0.15s; }
+      .btn-edit { background: ${C.accentDim}; color: ${C.accent}; }
+      .btn-edit:hover { background: ${C.accent}; color: #000; }
+      .btn-delete { background: rgba(224,92,92,0.12); color: ${C.red}; }
+      .btn-delete:hover { background: ${C.red}; color: #fff; }
+      .submit-btn { width: 100%; padding: 14px; border: none; border-radius: 10px; font-size: 16px; font-weight: 700; letter-spacing: 0.06em; background: ${C.accent}; color: #000; transition: all 0.2s; }
+      .submit-btn:hover { background: #ffb81c; transform: translateY(-1px); box-shadow: 0 8px 24px rgba(240,165,0,0.3); }
+      .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); padding: 12px 24px; border-radius: 10px; font-size: 14px; font-weight: 600; z-index: 1000; animation: fadeUp 0.3s ease; pointer-events: none; }
+      @keyframes fadeUp { from { opacity:0; transform: translateX(-50%) translateY(10px); } to { opacity:1; transform: translateX(-50%) translateY(0); } }
+      .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 999; display: flex; align-items: center; justify-content: center; }
+      .modal { background: ${C.surface}; border: 1px solid ${C.border}; border-radius: 14px; padding: 28px; max-width: 340px; width: 90%; }
+    `;
+
+    const initialForm = {
+      game: "", date: new Date().toISOString().split("T")[0],
+      players: "", winner: "", scores: "", rating: "3", notes: "",
+    };
+
+    function loadSessions() {
+      try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); } catch { return []; }
+    }
+    function saveSessions(s) {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch {}
+    }
+
+    function App() {
+      const [sessions, setSessions] = React.useState(loadSessions);
+      const [view, setView] = React.useState("log");
+      const [form, setForm] = React.useState(initialForm);
+      const [editId, setEditId] = React.useState(null);
+      const [search, setSearch] = React.useState("");
+      const [toast, setToast] = React.useState(null);
+      const [deleteConfirm, setDeleteConfirm] = React.useState(null);
+
+      const showToast = (msg, type = "success") => {
+        setToast({ msg, type });
+        setTimeout(() => setToast(null), 2500);
+      };
+
+      const save = (s) => { setSessions(s); saveSessions(s); };
+
+      const handleSubmit = () => {
+        if (!form.game.trim()) return showToast("Game name required", "error");
+        const entry = { ...form, id: editId || Date.now().toString(), game: form.game.trim() };
+        const updated = editId ? sessions.map(s => s.id === editId ? entry : s) : [entry, ...sessions];
+        save(updated);
+        showToast(editId ? "Session updated!" : "Session logged!");
+        setForm(initialForm); setEditId(null); setView("history");
+      };
+
+      const handleEdit = (s) => {
+        setForm({ game: s.game, date: s.date, players: s.players, winner: s.winner, scores: s.scores, rating: s.rating, notes: s.notes });
+        setEditId(s.id); setView("log");
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      };
+
+      const handleDelete = (id) => {
+        save(sessions.filter(s => s.id !== id));
+        setDeleteConfirm(null); showToast("Session deleted", "error");
+      };
+
+      const yearSessions = sessions.filter(s => s.date?.startsWith(String(YEAR)));
+      const filtered = sessions.filter(s =>
+        [s.game, s.players, s.winner].some(f => f?.toLowerCase().includes(search.toLowerCase()))
+      );
+
+      const gameCounts = {};
+      yearSessions.forEach(s => { gameCounts[s.game] = (gameCounts[s.game] || 0) + 1; });
+      const topGames = Object.entries(gameCounts).sort((a,b) => b[1]-a[1]).slice(0,5);
+
+      const playerWins = {};
+      yearSessions.forEach(s => {
+        s.winner?.split(",").map(w => w.trim()).filter(Boolean).forEach(w => {
+          playerWins[w] = (playerWins[w] || 0) + 1;
+        });
+      });
+      const leaderboard = Object.entries(playerWins).sort((a,b) => b[1]-a[1]).slice(0,8);
+
+      const avgRating = yearSessions.length
+        ? (yearSessions.reduce((a,s) => a + Number(s.rating||3), 0) / yearSessions.length).toFixed(1) : "—";
+      const uniqueGames = new Set(yearSessions.map(s => s.game)).size;
+
+      const monthCounts = Array(12).fill(0);
+      yearSessions.forEach(s => { const m = parseInt(s.date?.split("-")[1])-1; if(m>=0) monthCounts[m]++; });
+      const maxMonth = Math.max(...monthCounts, 1);
+      const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+      return (
+        <div style={{ background: C.bg, minHeight: "100vh", paddingBottom: 80 }}>
+          <style>{css}</style>
+
+          {/* Header */}
+          <div style={{ borderBottom: `1px solid ${C.border}`, padding: "0 24px" }}>
+            <div style={{ maxWidth: 700, margin: "0 auto" }}>
+              <div style={{ padding: "20px 0 0", display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{ fontSize: 28 }}>🎲</span>
+                <div>
+                  <h1 style={{ fontFamily: "'Space Mono', monospace", fontSize: 20, fontWeight: 700, letterSpacing: "-0.02em" }}>
+                    BOARD<span style={{ color: C.accent }}>LOG</span>
+                  </h1>
+                  <p style={{ fontSize: 12, color: C.textMuted, fontFamily: "'Space Mono', monospace" }}>{YEAR} Game Tracker</p>
+                </div>
+                <div style={{ marginLeft: "auto", background: C.accentDim, border: `1px solid ${C.accent}`, borderRadius: 20, padding: "4px 14px", fontFamily: "'Space Mono', monospace", fontSize: 13, color: C.accent, fontWeight: 700 }}>
+                  {yearSessions.length} plays
+                </div>
+              </div>
+              <div style={{ display: "flex", marginTop: 8 }}>
+                {[["log","＋ Log Game"],["history","History"],["stats","Stats"]].map(([id, label]) => (
+                  <button key={id} className={`tab-btn ${view===id?"active":""}`}
+                    onClick={() => { setView(id); if(id!=="log"){setEditId(null);setForm(initialForm);} }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ maxWidth: 700, margin: "0 auto", padding: "28px 24px" }}>
+
+            {/* LOG */}
+            {view === "log" && (
+              <div>
+                <h2 style={{ fontFamily: "'Space Mono', monospace", fontSize: 13, color: C.textMuted, letterSpacing: "0.08em", marginBottom: 24 }}>
+                  {editId ? "✏️ EDIT SESSION" : "NEW SESSION"}
+                </h2>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                  <div style={{ gridColumn: "1/-1" }}>
+                    <label className="field-label">Game Name *</label>
+                    <input className="field-input" placeholder="e.g. Ticket to Ride" value={form.game} onChange={e => setForm({...form, game: e.target.value})} />
+                  </div>
+                  <div>
+                    <label className="field-label">Date</label>
+                    <input type="date" className="field-input" value={form.date} onChange={e => setForm({...form, date: e.target.value})} />
+                  </div>
+                  <div>
+                    <label className="field-label">Winner(s)</label>
+                    <input className="field-input" placeholder="e.g. Nick" value={form.winner} onChange={e => setForm({...form, winner: e.target.value})} />
+                  </div>
+                  <div style={{ gridColumn: "1/-1" }}>
+                    <label className="field-label">Players (comma-separated)</label>
+                    <input className="field-input" placeholder="e.g. Nick, Sarah, Tom" value={form.players} onChange={e => setForm({...form, players: e.target.value})} />
+                  </div>
+                  <div style={{ gridColumn: "1/-1" }}>
+                    <label className="field-label">Scores</label>
+                    <input className="field-input" placeholder="e.g. Nick: 120, Sarah: 95" value={form.scores} onChange={e => setForm({...form, scores: e.target.value})} />
+                  </div>
+                  <div style={{ gridColumn: "1/-1" }}>
+                    <label className="field-label">Your Rating</label>
+                    <div style={{ display: "flex", gap: 4, marginTop: 2 }}>
+                      {[1,2,3,4,5].map(n => (
+                        <button key={n} onClick={() => setForm({...form, rating: String(n)})}
+                          style={{ background: "none", border: "none", fontSize: 24, cursor: "pointer", color: n <= Number(form.rating) ? C.accent : C.textDim, transition: "transform 0.1s" }}
+                          onMouseEnter={e => e.target.style.transform="scale(1.2)"}
+                          onMouseLeave={e => e.target.style.transform="scale(1)"}>★</button>
+                      ))}
+                      <span style={{ marginLeft: 8, color: C.textMuted, fontSize: 13, alignSelf: "center" }}>
+                        {["Terrible","Meh","Decent","Great","Amazing!"][Number(form.rating)-1]}
+                      </span>
+                    </div>
+                  </div>
+                  <div style={{ gridColumn: "1/-1" }}>
+                    <label className="field-label">Notes</label>
+                    <textarea className="field-input" placeholder="House rules, highlights, memorable moments…" rows={3} value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} style={{ resize: "vertical" }} />
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 12, marginTop: 24 }}>
+                  <button className="submit-btn" onClick={handleSubmit} style={{ flex: 1 }}>
+                    {editId ? "UPDATE SESSION" : "LOG SESSION"}
+                  </button>
+                  {editId && (
+                    <button onClick={() => { setEditId(null); setForm(initialForm); }}
+                      style={{ padding: "14px 20px", border: `1.5px solid ${C.border}`, borderRadius: 10, background: "none", color: C.textMuted, fontWeight: 600, fontSize: 14 }}>
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* HISTORY */}
+            {view === "history" && (
+              <div>
+                <div style={{ display: "flex", gap: 12, marginBottom: 20, alignItems: "center" }}>
+                  <input className="field-input" placeholder="Search games, players, winners…" value={search} onChange={e => setSearch(e.target.value)} style={{ flex: 1 }} />
+                  <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 12, color: C.textDim, whiteSpace: "nowrap" }}>{filtered.length} records</span>
+                </div>
+                {filtered.length === 0 && (
+                  <div style={{ textAlign: "center", padding: "60px 0", color: C.textDim }}>
+                    <div style={{ fontSize: 40, marginBottom: 12 }}>🎲</div>
+                    <p style={{ fontFamily: "'Space Mono', monospace", fontSize: 13 }}>{search ? "No matches found" : "No sessions logged yet"}</p>
+                  </div>
+                )}
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {filtered.map(s => (
+                    <div key={s.id} className="card" style={{ padding: "16px 18px" }}>
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                            <span style={{ fontWeight: 700, fontSize: 16 }}>{s.game}</span>
+                            {s.winner && <span style={{ background: C.greenDim, color: C.green, borderRadius: 20, padding: "2px 10px", fontSize: 12, fontWeight: 600 }}>🏆 {s.winner}</span>}
+                            <span style={{ marginLeft: "auto", color: C.accent, fontSize: 13, fontFamily: "'Space Mono', monospace" }}>{"★".repeat(Number(s.rating||3))}</span>
+                          </div>
+                          <div style={{ marginTop: 6, display: "flex", gap: 16, flexWrap: "wrap" }}>
+                            <span style={{ fontSize: 12, color: C.textMuted, fontFamily: "'Space Mono', monospace" }}>{s.date}</span>
+                            {s.players && <span style={{ fontSize: 12, color: C.textMuted }}>👥 {s.players}</span>}
+                            {s.scores && <span style={{ fontSize: 12, color: C.textDim }}>📊 {s.scores}</span>}
+                          </div>
+                          {s.notes && <p style={{ marginTop: 8, fontSize: 13, color: C.textMuted, fontStyle: "italic", lineHeight: 1.5 }}>{s.notes}</p>}
+                        </div>
+                        <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                          <button className="action-btn btn-edit" onClick={() => handleEdit(s)}>Edit</button>
+                          <button className="action-btn btn-delete" onClick={() => setDeleteConfirm(s.id)}>Delete</button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* STATS */}
+            {view === "stats" && (
+              <div>
+                <h2 style={{ fontFamily: "'Space Mono', monospace", fontSize: 13, color: C.textMuted, letterSpacing: "0.08em", marginBottom: 20 }}>
+                  {YEAR} AT A GLANCE
+                </h2>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 24 }}>
+                  {[{ label: "Sessions", value: yearSessions.length, icon: "🎲" },
+                    { label: "Unique Games", value: uniqueGames, icon: "📦" },
+                    { label: "Avg Rating", value: avgRating, icon: "⭐" }].map(({ label, value, icon }) => (
+                    <div key={label} className="card" style={{ padding: "18px 16px", textAlign: "center" }}>
+                      <div style={{ fontSize: 24, marginBottom: 6 }}>{icon}</div>
+                      <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 26, fontWeight: 700, color: C.accent }}>{value}</div>
+                      <div style={{ fontSize: 11, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 2 }}>{label}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="card" style={{ padding: "20px", marginBottom: 16 }}>
+                  <h3 style={{ fontFamily: "'Space Mono', monospace", fontSize: 12, color: C.textMuted, letterSpacing: "0.08em", marginBottom: 16 }}>PLAYS BY MONTH</h3>
+                  <div style={{ display: "flex", alignItems: "flex-end", gap: 6, height: 80 }}>
+                    {monthCounts.map((count, i) => (
+                      <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                        <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 10, color: count > 0 ? C.accent : C.textDim }}>{count || ""}</span>
+                        <div style={{ width: "100%", background: count > 0 ? C.accent : C.border, borderRadius: "3px 3px 0 0", height: `${Math.max((count/maxMonth)*56, count>0?4:2)}px` }} />
+                        <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 9, color: C.textDim }}>{monthNames[i]}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  <div className="card" style={{ padding: "18px" }}>
+                    <h3 style={{ fontFamily: "'Space Mono', monospace", fontSize: 12, color: C.textMuted, letterSpacing: "0.08em", marginBottom: 14 }}>MOST PLAYED</h3>
+                    {topGames.length === 0 && <p style={{ color: C.textDim, fontSize: 13 }}>No data yet</p>}
+                    {topGames.map(([game, count], i) => (
+                      <div key={game} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                        <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 11, color: C.textDim, width: 14 }}>#{i+1}</span>
+                        <span style={{ flex: 1, fontSize: 13, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{game}</span>
+                        <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 12, color: C.accent, fontWeight: 700 }}>{count}x</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="card" style={{ padding: "18px" }}>
+                    <h3 style={{ fontFamily: "'Space Mono', monospace", fontSize: 12, color: C.textMuted, letterSpacing: "0.08em", marginBottom: 14 }}>WIN LEADER</h3>
+                    {leaderboard.length === 0 && <p style={{ color: C.textDim, fontSize: 13 }}>No data yet</p>}
+                    {leaderboard.map(([player, wins], i) => (
+                      <div key={player} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                        <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 11, color: i===0 ? C.accent : C.textDim, width: 14 }}>{i===0?"🥇":`#${i+1}`}</span>
+                        <span style={{ flex: 1, fontSize: 13, fontWeight: 500 }}>{player}</span>
+                        <span style={{ fontFamily: "'Space Mono', monospace", fontSize: 12, color: C.green, fontWeight: 700 }}>{wins}W</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {toast && (
+            <div className="toast" style={{ background: toast.type === "error" ? C.red : C.green, color: "#fff" }}>
+              {toast.msg}
+            </div>
+          )}
+
+          {deleteConfirm && (
+            <div className="modal-overlay" onClick={() => setDeleteConfirm(null)}>
+              <div className="modal" onClick={e => e.stopPropagation()}>
+                <h3 style={{ fontFamily: "'Space Mono', monospace", fontSize: 15, marginBottom: 10 }}>Delete session?</h3>
+                <p style={{ color: C.textMuted, fontSize: 14, marginBottom: 24 }}>This action cannot be undone.</p>
+                <div style={{ display: "flex", gap: 10 }}>
+                  <button onClick={() => handleDelete(deleteConfirm)} style={{ flex: 1, padding: "10px", background: C.red, color: "#fff", border: "none", borderRadius: 8, fontWeight: 700, fontSize: 14 }}>Delete</button>
+                  <button onClick={() => setDeleteConfirm(null)} style={{ flex: 1, padding: "10px", background: C.border, color: C.text, border: "none", borderRadius: 8, fontWeight: 700, fontSize: 14 }}>Cancel</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<App />);
+  </script>
+</body>
+</html>
